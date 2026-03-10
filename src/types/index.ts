@@ -67,6 +67,9 @@ export type RootStackParamList = {
   BusinessHours: { agentId: string };
   AgentKnowledge: { agentId: string };
   AppointmentSettings: { agentId: string };
+  HelpCenter: undefined;
+  ContactSupport: undefined;
+  Legal: { type: 'terms' | 'privacy' };
 };
 
 export type MainTabParamList = {

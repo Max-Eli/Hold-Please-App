@@ -25,6 +25,9 @@ import LeadsScreen from '../screens/LeadsScreen';
 import BusinessHoursScreen from '../screens/BusinessHoursScreen';
 import AgentKnowledgeScreen from '../screens/AgentKnowledgeScreen';
 import AppointmentSettingsScreen from '../screens/AppointmentSettingsScreen';
+import HelpCenterScreen from '../screens/HelpCenterScreen';
+import ContactSupportScreen from '../screens/ContactSupportScreen';
+import LegalScreen from '../screens/LegalScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -115,6 +118,9 @@ export default function AppNavigator() {
             <Stack.Screen name="BusinessHours" component={BusinessHoursScreen} />
             <Stack.Screen name="AgentKnowledge" component={AgentKnowledgeScreen} />
             <Stack.Screen name="AppointmentSettings" component={AppointmentSettingsScreen} />
+            <Stack.Screen name="HelpCenter" component={HelpCenterScreen} />
+            <Stack.Screen name="ContactSupport" component={ContactSupportScreen} />
+            <Stack.Screen name="Legal" component={LegalScreen} />
           </>
         )}
       </Stack.Navigator>

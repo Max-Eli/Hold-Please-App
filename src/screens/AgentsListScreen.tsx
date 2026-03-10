@@ -23,7 +23,8 @@ import { ColorScheme, spacing, fontSize, borderRadius } from '../constants/theme
 import { useTheme } from '../context/ThemeContext';
 import { useAgents } from '../context/AgentContext';
 import { useSubscription } from '../context/SubscriptionContext';
-import { agentsApi } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
+import { agentsApi, phoneNumbersApi } from '../lib/api';
 
 const VOICES: { id: string; name: string; desc: string }[] = [
   { id: 'alloy', name: 'Alloy', desc: 'Neutral and balanced' },
@@ -40,6 +41,8 @@ export default function AgentsListScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
   const { agents, isLoading, refreshAgents, updateAgent, removeAgent } = useAgents();
   const { isPro } = useSubscription();
+  const { organizationId } = useAuth();
+  const [assigningPhone, setAssigningPhone] = useState(false);
 
   // Prefer agent with a phone number assigned
   const agent = agents.length > 0
@@ -202,7 +205,47 @@ export default function AgentsListScreen({ navigation }: any) {
             </>
           ) : (
             <View style={{ padding: 20, alignItems: 'center' }}>
-              <Text style={{ fontSize: 14, color: colors.textMuted }}>A number will be assigned automatically.</Text>
+              <Ionicons name="call-outline" size={28} color={colors.textMuted} style={{ marginBottom: 8 }} />
+              <Text style={{ fontSize: 14, color: colors.textSecondary, textAlign: 'center', marginBottom: 12, lineHeight: 20 }}>
+                No phone number assigned yet.{'\n'}Tap below to assign one from your Twilio account.
+              </Text>
+              <TouchableOpacity
+                style={[s.fwdBtn, assigningPhone && { opacity: 0.6 }]}
+                onPress={async () => {
+                  if (!organizationId || assigningPhone) return;
+                  setAssigningPhone(true);
+                  try {
+                    await phoneNumbersApi.connectTwilio(organizationId);
+                    const available = await phoneNumbersApi.getAvailableTwilioNumbers(organizationId);
+                    const existing = await phoneNumbersApi.list(organizationId);
+                    const usedNumbers = new Set((existing || []).map((p: any) => p.phone_number));
+                    const freeNum = (available || []).find((n: any) => !usedNumbers.has(n.phone_number));
+                    if (!freeNum) {
+                      Alert.alert('No Numbers Available', 'No available phone numbers found in your Twilio account. Please add a number in your Twilio dashboard first.');
+                      return;
+                    }
+                    await phoneNumbersApi.assignToAgent({
+                      phone_number: freeNum.phone_number,
+                      agent_id: agent.id,
+                      organization_id: organizationId,
+                      twilio_friendly_name: freeNum.friendly_name,
+                    });
+                    await refreshAgents();
+                    Alert.alert('Success', `Phone number ${freeNum.phone_number} has been assigned to your agent.`);
+                  } catch (err: any) {
+                    Alert.alert('Assignment Failed', err?.message || 'Failed to assign phone number. Check your Twilio credentials and try again.');
+                  } finally {
+                    setAssigningPhone(false);
+                  }
+                }}
+                activeOpacity={0.7}
+              >
+                {assigningPhone ? (
+                  <ActivityIndicator size="small" color={colors.background} />
+                ) : (
+                  <Text style={s.fwdBtnText}>Assign Number</Text>
+                )}
+              </TouchableOpacity>
             </View>
           )}
         </View>

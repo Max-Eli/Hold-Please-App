@@ -137,19 +137,19 @@ export default function SettingsScreen({ navigation }: any) {
         <Text style={styles.sectionLabel}>Support</Text>
         <View style={styles.group}>
           <Row colors={colors} icon="help-circle-outline" label="Help Center" onPress={() => {
-            Linking.openURL('https://holdplease.ai/help');
+            navigation.navigate('HelpCenter');
           }} />
           <Sep colors={colors} />
           <Row colors={colors} icon="chatbubble-outline" label="Contact Support" onPress={() => {
-            Linking.openURL('mailto:support@holdplease.ai');
+            navigation.navigate('ContactSupport');
           }} />
           <Sep colors={colors} />
           <Row colors={colors} icon="document-text-outline" label="Terms of Service" onPress={() => {
-            Linking.openURL('https://holdplease.ai/terms');
+            navigation.navigate('Legal', { type: 'terms' });
           }} />
           <Sep colors={colors} />
           <Row colors={colors} icon="shield-outline" label="Privacy Policy" onPress={() => {
-            Linking.openURL('https://holdplease.ai/privacy');
+            navigation.navigate('Legal', { type: 'privacy' });
           }} />
         </View>
 
