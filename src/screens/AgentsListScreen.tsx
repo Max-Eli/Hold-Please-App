@@ -27,12 +27,14 @@ import { useAuth } from '../context/AuthContext';
 import { agentsApi, phoneNumbersApi } from '../lib/api';
 
 const VOICES: { id: string; name: string; desc: string }[] = [
-  { id: 'alloy', name: 'Alloy', desc: 'Neutral and balanced' },
-  { id: 'echo', name: 'Echo', desc: 'Warm and conversational' },
-  { id: 'fable', name: 'Fable', desc: 'Expressive and dynamic' },
-  { id: 'onyx', name: 'Onyx', desc: 'Deep and authoritative' },
-  { id: 'nova', name: 'Nova', desc: 'Friendly and upbeat' },
-  { id: 'shimmer', name: 'Shimmer', desc: 'Clear and professional' },
+  { id: 'English_CalmWoman', name: 'Calm', desc: 'Serene and peaceful · Female' },
+  { id: 'English_Trustworth_Man', name: 'Trustworthy', desc: 'Reliable and confident · Male' },
+  { id: 'English_FriendlyPerson', name: 'Friendly', desc: 'Approachable and warm · Male' },
+  { id: 'English_Graceful_Lady', name: 'Graceful', desc: 'Elegant and refined · Female' },
+  { id: 'English_ConfidentWoman', name: 'Confident', desc: 'Assured and professional · Female' },
+  { id: 'English_Diligent_Man', name: 'Professional', desc: 'Focused and composed · Male' },
+  { id: 'English_SereneWoman', name: 'Serene', desc: 'Tranquil and soothing · Female' },
+  { id: 'English_Gentle-voiced_man', name: 'Gentle', desc: 'Soft and calming · Male' },
 ];
 
 export default function AgentsListScreen({ navigation }: any) {
@@ -49,7 +51,7 @@ export default function AgentsListScreen({ navigation }: any) {
     ? agents.find((a) => a.phoneNumber) || agents[0]
     : null;
 
-  const [voiceId, setVoiceId] = useState('alloy');
+  const [voiceId, setVoiceId] = useState('English_CalmWoman');
   const [sysPrompt, setSysPrompt] = useState('');
   const [loading, setLoading] = useState(true);
   const [isActive, setIsActive] = useState(agent?.isActive ?? false);
@@ -128,8 +130,8 @@ export default function AgentsListScreen({ navigation }: any) {
 
   const pickVoice = async (id: string) => {
     const prev = voiceId; setVoiceId(id); setVoiceModal(false);
-    try { await updateAgent(agent.id, { voice_id: id }); }
-    catch { setVoiceId(prev); Alert.alert('Error', 'Failed to update voice'); }
+    try { await updateAgent(agent.id, { voice_id: id, voice_provider: 'minimax', voice_architecture: 'realtime' }); }
+    catch (err: any) { setVoiceId(prev); console.error('[VOICE] update failed:', err); Alert.alert('Error', err?.message || 'Failed to update voice'); }
   };
 
   const copyPhone = async () => {
@@ -207,23 +209,74 @@ export default function AgentsListScreen({ navigation }: any) {
             <View style={{ padding: 20, alignItems: 'center' }}>
               <Ionicons name="call-outline" size={28} color={colors.textMuted} style={{ marginBottom: 8 }} />
               <Text style={{ fontSize: 14, color: colors.textSecondary, textAlign: 'center', marginBottom: 12, lineHeight: 20 }}>
-                No phone number assigned yet.{'\n'}Tap below to assign one from your Twilio account.
+                No phone number assigned yet.{'\n'}Tap below to assign one to your agent.
               </Text>
               <TouchableOpacity
-                style={[s.fwdBtn, assigningPhone && { opacity: 0.6 }]}
+                style={[s.fwdBtn, { paddingHorizontal: 32 }, assigningPhone && { opacity: 0.6 }]}
                 onPress={async () => {
                   if (!organizationId || assigningPhone) return;
                   setAssigningPhone(true);
                   try {
-                    await phoneNumbersApi.connectTwilio(organizationId);
-                    const available = await phoneNumbersApi.getAvailableTwilioNumbers(organizationId);
+                    // Step 1: Check existing phone numbers in DB
+                    console.log('[PHONE] Fetching existing phone numbers...');
                     const existing = await phoneNumbersApi.list(organizationId);
-                    const usedNumbers = new Set((existing || []).map((p: any) => p.phone_number));
+                    console.log('[PHONE] existing:', JSON.stringify(existing));
+
+                    // Step 2: Look for unassigned numbers (agent_id is null) — PATCH to reassign
+                    const unassigned = (existing || []).find((p: any) => !p.agent_id);
+                    if (unassigned) {
+                      console.log('[PHONE] Found unassigned number, patching:', unassigned.id);
+                      try {
+                        await phoneNumbersApi.update(unassigned.id, { agent_id: agent.id });
+                        await refreshAgents();
+                        Alert.alert('Success', `Phone number ${unassigned.phone_number} has been assigned to your agent.`);
+                        return;
+                      } catch (patchErr: any) {
+                        console.warn('[PHONE] PATCH failed, trying Twilio fallback:', patchErr?.message);
+                        // Fall through to Twilio failsafe
+                      }
+                    }
+
+                    // Step 3: Check for orphaned numbers (assigned to deleted agents) and reclaim
+                    const agentIds = new Set(agents.map((a) => a.id));
+                    const orphaned = (existing || []).filter((p: any) => p.agent_id && !agentIds.has(p.agent_id));
+                    for (const orphan of orphaned) {
+                      console.log('[PHONE] Reclaiming orphaned number:', orphan.id);
+                      try {
+                        await phoneNumbersApi.update(orphan.id, { agent_id: agent.id });
+                        await refreshAgents();
+                        Alert.alert('Success', `Phone number ${orphan.phone_number} has been assigned to your agent.`);
+                        return;
+                      } catch {
+                        // Try to unassign then reassign
+                        try { await phoneNumbersApi.unassign(orphan.id); } catch {}
+                      }
+                    }
+
+                    // Step 4: Failsafe — pull available numbers from Twilio account
+                    console.log('[PHONE] No existing numbers available, trying Twilio...');
+                    try {
+                      await phoneNumbersApi.connectTwilio(organizationId);
+                    } catch (connectErr: any) {
+                      console.warn('[PHONE] connectTwilio failed:', connectErr?.message);
+                    }
+
+                    const available = await phoneNumbersApi.getAvailableTwilioNumbers(organizationId);
+                    console.log('[PHONE] available Twilio numbers:', JSON.stringify(available));
+
+                    // Re-fetch existing after cleanup
+                    const existingAfter = orphaned.length > 0
+                      ? await phoneNumbersApi.list(organizationId)
+                      : existing;
+                    const usedNumbers = new Set((existingAfter || []).map((p: any) => p.phone_number));
                     const freeNum = (available || []).find((n: any) => !usedNumbers.has(n.phone_number));
+
                     if (!freeNum) {
-                      Alert.alert('No Numbers Available', 'No available phone numbers found in your Twilio account. Please add a number in your Twilio dashboard first.');
+                      Alert.alert('No Numbers Available', 'No available phone numbers found. Please contact support for assistance.');
                       return;
                     }
+
+                    console.log('[PHONE] Assigning new number:', freeNum.phone_number);
                     await phoneNumbersApi.assignToAgent({
                       phone_number: freeNum.phone_number,
                       agent_id: agent.id,
@@ -233,7 +286,8 @@ export default function AgentsListScreen({ navigation }: any) {
                     await refreshAgents();
                     Alert.alert('Success', `Phone number ${freeNum.phone_number} has been assigned to your agent.`);
                   } catch (err: any) {
-                    Alert.alert('Assignment Failed', err?.message || 'Failed to assign phone number. Check your Twilio credentials and try again.');
+                    console.error('[PHONE] Assignment error:', err);
+                    Alert.alert('Assignment Failed', err?.message || 'Unknown error');
                   } finally {
                     setAssigningPhone(false);
                   }

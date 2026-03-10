@@ -152,7 +152,15 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
   const updateAgent = useCallback(
     async (id: string, updates: Record<string, any>) => {
       console.log('[AGENTS] updateAgent called:', id, JSON.stringify(updates));
-      const result = await agentsApi.update(id, updates);
+      // PUT requires full object — fetch current, merge, then send
+      const current = await agentsApi.get(id);
+      const merged = { ...current, ...updates };
+      // Remove read-only fields the backend won't accept
+      delete merged.id;
+      delete merged.created_at;
+      delete merged.organization_id;
+      console.log('[AGENTS] updateAgent sending merged:', JSON.stringify(merged));
+      const result = await agentsApi.update(id, merged);
       console.log('[AGENTS] updateAgent response:', JSON.stringify(result));
       setAgents((prev) =>
         prev.map((a) => (a.id === id ? { ...a, ...updates } : a))
@@ -164,11 +172,23 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
   const removeAgent = useCallback(
     async (id: string) => {
       console.log('[AGENTS] deleteAgent called:', id);
+      // Unassign any phone numbers before deleting the agent
+      if (organizationId) {
+        try {
+          const phones = await phoneNumbersApi.list(organizationId);
+          const agentPhones = (phones || []).filter((p: any) => p.agent_id === id);
+          for (const phone of agentPhones) {
+            await phoneNumbersApi.unassign(phone.id);
+          }
+        } catch {
+          // Continue with deletion even if unassign fails
+        }
+      }
       await agentsApi.delete(id);
       console.log('[AGENTS] deleteAgent success');
       setAgents((prev) => prev.filter((a) => a.id !== id));
     },
-    []
+    [organizationId]
   );
 
   return (

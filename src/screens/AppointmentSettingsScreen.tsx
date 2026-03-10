@@ -8,15 +8,22 @@ import {
   Switch,
   Alert,
   TextInput,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as WebBrowser from 'expo-web-browser';
 import { ColorScheme, spacing, fontSize, borderRadius } from '../constants/theme';
 import { useTheme } from '../context/ThemeContext';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types';
 import { agentsApi } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
+import { supabase } from '../lib/supabase';
+
+const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL!;
+const APP_REDIRECT_URI = 'holdplease://calendar-connected';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'AppointmentSettings'>;
@@ -62,6 +69,7 @@ export default function AppointmentSettingsScreen({ navigation, route }: Props) 
   const { colors } = useTheme();
   const s = createStyles(colors);
   const { agentId } = route.params;
+  const { organizationId } = useAuth();
 
   const [settings, setSettings] = useState<AppointmentSettings>({
     enabled: false,
@@ -72,6 +80,72 @@ export default function AppointmentSettingsScreen({ navigation, route }: Props) 
   });
   const [saving, setSaving] = useState(false);
 
+  // Google Calendar OAuth
+  const [calendarConnected, setCalendarConnected] = useState(false);
+  const [calendarEmail, setCalendarEmail] = useState('');
+  const [connectingCalendar, setConnectingCalendar] = useState(false);
+
+  const checkCalendarConnection = async (): Promise<{ connected: boolean; email: string; connectionId: string }> => {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token || !organizationId) return { connected: false, email: '', connectionId: '' };
+
+    const res = await fetch(
+      `${API_BASE}/api/connections/?organization_id=${organizationId}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) return { connected: false, email: '', connectionId: '' };
+
+    const connections = await res.json();
+    const gcal = connections.find(
+      (c: any) => c.provider === 'google_calendar' && c.status === 'active',
+    );
+    if (gcal) {
+      return { connected: true, email: gcal.account_identifier || '', connectionId: gcal.id };
+    }
+    return { connected: false, email: '', connectionId: '' };
+  };
+
+  const connectCalendar = async () => {
+    setConnectingCalendar(true);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error('Not authenticated');
+
+      // 1. Get the OAuth authorization URL from existing backend endpoint
+      const res = await fetch(
+        `${API_BASE}/api/connections/oauth/initiate/google_calendar?organization_id=${organizationId}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+
+      if (!res.ok) throw new Error(await res.text());
+      const { authorize_url } = await res.json();
+
+      // 2. Open full browser for OAuth — user closes browser when done.
+      await WebBrowser.openBrowserAsync(authorize_url);
+
+      // 3. After browser closes, check if a google_calendar connection was created
+      const result = await checkCalendarConnection();
+      if (result.connected) {
+        setCalendarConnected(true);
+        setCalendarEmail(result.email);
+        await AsyncStorage.setItem(`@holdplease_gcal_${agentId}`, JSON.stringify({
+          connected: true,
+          email: result.email,
+          connection_id: result.connectionId,
+        }));
+        Alert.alert('Connected', 'Google Calendar has been connected successfully.');
+      }
+    } catch (err: any) {
+      console.error('[GCAL] Connect error:', err);
+      Alert.alert('Error', err?.message || 'Failed to connect Google Calendar.');
+    } finally {
+      setConnectingCalendar(false);
+    }
+  };
+
+  // Load appointment settings + check backend for existing calendar connection
   useEffect(() => {
     (async () => {
       try {
@@ -80,9 +154,65 @@ export default function AppointmentSettingsScreen({ navigation, route }: Props) 
           const parsed = JSON.parse(stored) as AppointmentSettings;
           setSettings(parsed);
         }
+
+        // Check backend for active google_calendar connection
+        const result = await checkCalendarConnection();
+        if (result.connected) {
+          setCalendarConnected(true);
+          setCalendarEmail(result.email);
+          await AsyncStorage.setItem(`@holdplease_gcal_${agentId}`, JSON.stringify({
+            connected: true,
+            email: result.email,
+            connection_id: result.connectionId,
+          }));
+        } else {
+          // No active connection — clear local cache
+          setCalendarConnected(false);
+          setCalendarEmail('');
+          await AsyncStorage.removeItem(`@holdplease_gcal_${agentId}`);
+        }
       } catch {}
     })();
   }, [agentId]);
+
+  const disconnectCalendar = async () => {
+    Alert.alert('Disconnect Calendar', 'This will remove the Google Calendar connection for this agent.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Disconnect',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            const { data } = await supabase.auth.getSession();
+            const token = data.session?.access_token;
+
+            // Get connection ID from local cache or backend
+            const cached = await AsyncStorage.getItem(`@holdplease_gcal_${agentId}`);
+            let connectionId = cached ? JSON.parse(cached).connection_id : null;
+
+            if (!connectionId) {
+              const result = await checkCalendarConnection();
+              connectionId = result.connectionId;
+            }
+
+            // Delete connection on backend
+            if (connectionId && token) {
+              await fetch(`${API_BASE}/api/connections/${connectionId}`, {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${token}` },
+              });
+            }
+          } catch (err) {
+            console.error('[GCAL] Disconnect error:', err);
+          }
+
+          setCalendarConnected(false);
+          setCalendarEmail('');
+          await AsyncStorage.removeItem(`@holdplease_gcal_${agentId}`);
+        },
+      },
+    ]);
+  };
 
   const updateField = <K extends keyof AppointmentSettings>(
     key: K,
@@ -288,7 +418,50 @@ export default function AppointmentSettingsScreen({ navigation, route }: Props) 
           ))}
         </View>
 
-        {/* 5. Confirmation Message */}
+        {/* 5. Calendar Connection */}
+        <Text style={s.sectionLabel}>Calendar</Text>
+        <View style={s.card}>
+          {calendarConnected ? (
+            <View style={s.calendarConnected}>
+              <View style={s.calendarConnectedLeft}>
+                <View style={s.calendarIcon}>
+                  <Ionicons name="calendar" size={20} color="#4285F4" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.calendarConnectedTitle}>Google Calendar</Text>
+                  <Text style={s.calendarConnectedEmail}>{calendarEmail || 'Connected'}</Text>
+                </View>
+              </View>
+              <TouchableOpacity onPress={disconnectCalendar} activeOpacity={0.6}>
+                <Text style={s.calendarDisconnect}>Disconnect</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={s.calendarEmpty}>
+              <Ionicons name="calendar-outline" size={28} color={colors.textMuted} style={{ marginBottom: 8 }} />
+              <Text style={s.calendarEmptyText}>
+                Connect your Google Calendar so your agent can check availability and book appointments in real time.
+              </Text>
+              <TouchableOpacity
+                style={[s.calendarBtn, connectingCalendar && { opacity: 0.5 }]}
+                onPress={connectCalendar}
+                disabled={connectingCalendar}
+                activeOpacity={0.7}
+              >
+                {connectingCalendar ? (
+                  <ActivityIndicator size="small" color={colors.background} />
+                ) : (
+                  <>
+                    <Ionicons name="logo-google" size={16} color={colors.background} style={{ marginRight: 8 }} />
+                    <Text style={s.calendarBtnText}>Connect Google Calendar</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+
+        {/* 6. Confirmation Message */}
         <Text style={s.sectionLabel}>Confirmation message</Text>
         <View style={s.card}>
           <TextInput
@@ -436,5 +609,67 @@ const createStyles = (colors: ColorScheme) =>
       fontSize: 15,
       fontWeight: '500',
       color: colors.textPrimary,
+    },
+
+    // Calendar connection
+    calendarConnected: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: 16,
+    },
+    calendarConnectedLeft: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      flex: 1,
+    },
+    calendarIcon: {
+      width: 40,
+      height: 40,
+      borderRadius: 10,
+      backgroundColor: 'rgba(66, 133, 244, 0.1)',
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 12,
+    },
+    calendarConnectedTitle: {
+      fontSize: 15,
+      fontWeight: '600',
+      color: colors.textPrimary,
+    },
+    calendarConnectedEmail: {
+      fontSize: 13,
+      color: colors.textSecondary,
+      marginTop: 1,
+    },
+    calendarDisconnect: {
+      fontSize: 14,
+      fontWeight: '500',
+      color: colors.error,
+    },
+    calendarEmpty: {
+      padding: 20,
+      alignItems: 'center',
+    },
+    calendarEmptyText: {
+      fontSize: 14,
+      color: colors.textSecondary,
+      textAlign: 'center',
+      lineHeight: 20,
+      marginBottom: 16,
+    },
+    calendarBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: '#4285F4',
+      paddingVertical: 12,
+      paddingHorizontal: 24,
+      borderRadius: 10,
+    },
+    calendarBtnText: {
+      color: '#fff',
+      fontSize: 15,
+      fontWeight: '600',
     },
   });

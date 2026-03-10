@@ -70,8 +70,9 @@ export const agentsApi = {
     apiRequest<any>('/api/agents/', {
       method: 'POST',
       body: JSON.stringify({
-        voice_provider: 'openai',
-        voice_id: 'alloy',
+        voice_provider: 'minimax',
+        voice_id: 'English_CalmWoman',
+        voice_architecture: 'realtime',
         model: 'gpt-4o',
         temperature: 0.7,
         max_tokens: 150,
@@ -81,7 +82,7 @@ export const agentsApi = {
 
   update: (agentId: string, data: Record<string, any>) =>
     apiRequest<any>(`/api/agents/${agentId}`, {
-      method: 'PATCH',
+      method: 'PUT',
       body: JSON.stringify(data),
     }),
 
@@ -127,6 +128,12 @@ export const phoneNumbersApi = {
         twilio_account_sid: TWILIO_ACCOUNT_SID,
         twilio_auth_token: TWILIO_AUTH_TOKEN,
       }),
+    }),
+
+  update: (phoneNumberId: string, data: Record<string, any>) =>
+    apiRequest<any>(`/api/phone-numbers/${phoneNumberId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
     }),
 
   unassign: (phoneNumberId: string) =>
